@@ -2,27 +2,29 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useHealthStore } from "@/lib/store";
 import { RiskGauge } from "@/components/results/RiskGauge";
 import { SystemReport } from "@/components/results/SystemReport";
 import { GoHerbCTA } from "@/components/results/GoHerbCTA";
 import { ComparisonChart } from "@/components/results/ComparisonChart";
-import { LightMap } from "@/components/results/LightMap";
 import { RiskTimeline } from "@/components/results/RiskTimeline";
+import { WhyThisResult } from "@/components/results/WhyThisResult";
+import { AnswerDetailList } from "@/components/results/AnswerDetailList";
 import {
   MalaysiaStatsBanner,
   PersonaCard,
   UrgencyFacts,
 } from "@/components/results/StatsCards";
+import { totalRedFlags } from "@/lib/answer-insights";
 import { RotateCcw, Download, Check, Loader2 } from "lucide-react";
 import type { SystemKey } from "@/lib/types";
 
-const SYSTEM_META: Record<SystemKey, { title: string; icon: string }> = {
+// 三大系统（血脂没有题目，不显示空格子）
+const SYSTEM_META: Record<"kidney" | "blood_pressure" | "blood_sugar", { title: string; icon: string }> = {
   kidney: { title: "肾脏", icon: "🫘" },
   blood_pressure: { title: "血压", icon: "❤️" },
   blood_sugar: { title: "血糖", icon: "🩸" },
-  lipids: { title: "血脂", icon: "🧈" },
 };
 
 const overallStyle = {
@@ -60,6 +62,31 @@ const overallStyle = {
   },
 };
 
+// Section heading with number badge
+function SectionTitle({ n, children }: { n: number; children: React.ReactNode }) {
+  return (
+    <div className="mb-3 mt-8 flex items-center gap-2">
+      <span className="flex h-7 w-7 items-center justify-center rounded-full bg-emerald-600 text-sm font-bold text-white">
+        {n}
+      </span>
+      <h2 className="text-xl font-bold text-slate-800">{children}</h2>
+    </div>
+  );
+}
+
+// Deterministic report number from registration (stable across re-renders)
+function makeReportNumber(name: string, phone: string, iso: string): string {
+  const d = new Date(iso);
+  const pad = (x: number) => x.toString().padStart(2, "0");
+  const datePart = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}`;
+  let hash = 0;
+  const seed = name + phone + iso;
+  for (let i = 0; i < seed.length; i++) {
+    hash = (hash * 31 + seed.charCodeAt(i)) & 0xffff;
+  }
+  return `GH-${datePart}-${hash.toString().padStart(4, "0").slice(-4)}`;
+}
+
 export default function ResultsPage() {
   const router = useRouter();
   const result = useHealthStore((s) => s.analysisResult);
@@ -75,9 +102,26 @@ export default function ResultsPage() {
     if (!result || !registration) router.replace("/");
   }, [result, registration, router]);
 
+  const reportNo = useMemo(
+    () =>
+      registration
+        ? makeReportNumber(
+            registration.name,
+            registration.phone,
+            registration.registeredAt
+          )
+        : "",
+    [registration]
+  );
+
   if (!result || !registration) return null;
 
   const overall = overallStyle[result.overallRisk];
+  const redCount = totalRedFlags(answers);
+  const reportDate = new Date(registration.registeredAt).toLocaleDateString(
+    "zh-CN",
+    { year: "numeric", month: "2-digit", day: "2-digit" }
+  );
 
   const handleSavePDF = async () => {
     setSaving(true);
@@ -92,7 +136,6 @@ export default function ResultsPage() {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || "保存失败");
       }
-      // Extract filename from Content-Disposition (filename*=UTF-8''...)
       const cd = res.headers.get("Content-Disposition") ?? "";
       const m = cd.match(/filename\*=UTF-8''([^;]+)/i);
       const filename = m ? decodeURIComponent(m[1]) : "GoHerb_报告.pdf";
@@ -116,14 +159,30 @@ export default function ResultsPage() {
 
   return (
     <main className="mx-auto max-w-3xl px-4 py-8">
-      {/* Greeting */}
-      <p className="text-base text-slate-500">
-        {registration.name}，这是你的健康风险报告
-      </p>
+      {/* ─── Report header ─── */}
+      <div className="rounded-2xl border border-slate-200 bg-white p-5">
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <div>
+            <div className="text-sm text-slate-500">GoHerb 健康风险评估报告</div>
+            <div className="text-lg font-bold text-slate-800">
+              {registration.name}
+            </div>
+          </div>
+          <div className="text-right text-sm text-slate-500">
+            <div>报告编号：{reportNo}</div>
+            <div>生成日期：{reportDate}</div>
+          </div>
+        </div>
+        <p className="mt-3 rounded-lg bg-slate-50 p-3 text-sm leading-relaxed text-slate-600">
+          📌 评估方法：本报告根据你回答的 31 题健康问卷，结合 AI 分析与国际医学指南
+          （KDIGO、MOH Malaysia、ADA、NHMS）生成。所有结论都对应你的实际回答。
+        </p>
+      </div>
 
-      {/* Overall summary */}
+      {/* ─── 1. Overall score ─── */}
+      <SectionTitle n={1}>整体风险评分</SectionTitle>
       <div
-        className={`mt-3 rounded-2xl border-2 border-slate-200 ${overall.bg} p-6`}
+        className={`rounded-2xl border-2 border-slate-200 ${overall.bg} p-6`}
       >
         <div className={`text-2xl font-bold ${overall.text}`}>
           {overall.headline}
@@ -155,12 +214,18 @@ export default function ResultsPage() {
             }}
           />
         </div>
+        {redCount > 0 && (
+          <p className={`mt-3 text-base font-medium ${overall.text}`}>
+            ⚠️ 你的 31 题里，有 <span className="font-bold">{redCount}</span>{" "}
+            项亮了红灯
+          </p>
+        )}
       </div>
 
-      {/* Per-system gauges */}
-      <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
-        {(Object.keys(SYSTEM_META) as SystemKey[]).map((k) => {
-          const sys = result.systems[k];
+      {/* Gauges */}
+      <div className="mt-4 grid grid-cols-3 gap-3">
+        {(Object.keys(SYSTEM_META) as (keyof typeof SYSTEM_META)[]).map((k) => {
+          const sys = result.systems[k as SystemKey];
           return (
             <RiskGauge
               key={k}
@@ -172,55 +237,16 @@ export default function ResultsPage() {
         })}
       </div>
 
-      {/* Persona card + Malaysia stats */}
-      <div className="mt-6 grid gap-4 lg:grid-cols-2">
-        <PersonaCard
-          result={result}
-          age={registration.age}
-          gender={registration.gender}
-        />
-        <MalaysiaStatsBanner />
-      </div>
+      {/* ─── 2. Why this result (answer → conclusion) ─── */}
+      <SectionTitle n={2}>为什么是这个结果？</SectionTitle>
+      <p className="mb-3 text-base text-slate-600">
+        以下结论，每一条都来自你刚才的回答：
+      </p>
+      <WhyThisResult result={result} answers={answers} />
 
-      {/* Comparison chart */}
-      <div className="mt-6">
-        <ComparisonChart result={result} age={registration.age} />
-      </div>
-
-      {/* Light map */}
-      <div className="mt-6">
-        <LightMap answers={answers} />
-      </div>
-
-      {/* Risk timeline */}
-      <div className="mt-6">
-        <RiskTimeline answers={answers} overallRisk={result.overallRisk} />
-      </div>
-
-      {/* Urgency facts */}
-      <div className="mt-6">
-        <UrgencyFacts />
-      </div>
-
-      {/* Top concerns */}
-      {result.topConcerns?.length ? (
-        <div className="mt-8 rounded-2xl border-2 border-rose-300 bg-rose-50 p-6">
-          <h3 className="text-xl font-bold text-rose-900">
-            🚨 最需要立刻关注的事
-          </h3>
-          <ul className="mt-3 space-y-2 text-base text-rose-900">
-            {result.topConcerns.map((c, i) => (
-              <li key={i} className="flex gap-2 leading-relaxed">
-                <span className="font-bold">{i + 1}.</span>
-                <span>{c}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
-
-      {/* Per-system detailed reports */}
-      <div className="mt-8 space-y-4">
+      {/* ─── 3. Detailed system reports ─── */}
+      <SectionTitle n={3}>各系统详细分析</SectionTitle>
+      <div className="space-y-4">
         {(Object.keys(result.systems) as SystemKey[]).map((k) => {
           const sys = result.systems[k];
           if (!sys) return null;
@@ -228,55 +254,93 @@ export default function ResultsPage() {
         })}
       </div>
 
-      {/* Immediate actions */}
-      {result.immediateActions?.length ? (
-        <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-6">
-          <h3 className="text-xl font-semibold text-slate-800">
-            ✅ 今天就可以做的事
-          </h3>
-          <ul className="mt-3 space-y-2 text-base text-slate-700">
-            {result.immediateActions.map((a, i) => (
-              <li key={i} className="flex gap-2 leading-relaxed">
-                <span className="text-emerald-600">✓</span>
-                <span>{a}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
+      {/* ─── 4. Top concerns ─── */}
+      {result.topConcerns?.length ? (
+        <>
+          <SectionTitle n={4}>最需要立刻关注的事</SectionTitle>
+          <div className="rounded-2xl border-2 border-rose-300 bg-rose-50 p-6">
+            <ul className="space-y-2 text-base text-rose-900">
+              {result.topConcerns.map((c, i) => (
+                <li key={i} className="flex gap-2 leading-relaxed">
+                  <span className="font-bold">{i + 1}.</span>
+                  <span>{c}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </>
       ) : null}
 
-      {result.lifestyleAdvice?.length ? (
-        <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-6">
-          <h3 className="text-xl font-semibold text-slate-800">
-            🌿 长期生活建议
-          </h3>
-          <ul className="mt-3 space-y-2 text-base text-slate-700">
-            {result.lifestyleAdvice.map((a, i) => (
-              <li key={i} className="flex gap-2 leading-relaxed">
-                <span className="text-sky-600">•</span>
-                <span>{a}</span>
-              </li>
-            ))}
-          </ul>
+      {/* ─── 5. Benchmarks & stats ─── */}
+      <SectionTitle n={5}>你 vs 马来西亚同龄人</SectionTitle>
+      <div className="space-y-4">
+        <div className="grid gap-4 lg:grid-cols-2">
+          <PersonaCard
+            result={result}
+            age={registration.age}
+            gender={registration.gender}
+          />
+          <MalaysiaStatsBanner />
         </div>
-      ) : null}
+        <ComparisonChart result={result} age={registration.age} />
+        <RiskTimeline answers={answers} overallRisk={result.overallRisk} />
+        <UrgencyFacts />
+      </div>
 
-      {result.followUpAdvice ? (
-        <div className="mt-4 rounded-xl bg-sky-50 p-4 text-base text-sky-900">
-          📅 复查建议：{result.followUpAdvice}
-        </div>
-      ) : null}
+      {/* ─── 6. Full answer detail ─── */}
+      <SectionTitle n={6}>你的完整答案</SectionTitle>
+      <AnswerDetailList answers={answers} />
 
-      {/* GoHerb CTA */}
+      {/* ─── 7. Action advice ─── */}
+      <SectionTitle n={7}>建议怎么做</SectionTitle>
+      <div className="space-y-4">
+        {result.immediateActions?.length ? (
+          <div className="rounded-2xl border border-slate-200 bg-white p-6">
+            <h3 className="text-lg font-semibold text-slate-800">
+              ✅ 今天就可以做的事
+            </h3>
+            <ul className="mt-3 space-y-2 text-base text-slate-700">
+              {result.immediateActions.map((a, i) => (
+                <li key={i} className="flex gap-2 leading-relaxed">
+                  <span className="text-emerald-600">✓</span>
+                  <span>{a}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+
+        {result.lifestyleAdvice?.length ? (
+          <div className="rounded-2xl border border-slate-200 bg-white p-6">
+            <h3 className="text-lg font-semibold text-slate-800">
+              🌿 长期生活建议
+            </h3>
+            <ul className="mt-3 space-y-2 text-base text-slate-700">
+              {result.lifestyleAdvice.map((a, i) => (
+                <li key={i} className="flex gap-2 leading-relaxed">
+                  <span className="text-sky-600">•</span>
+                  <span>{a}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+
+        {result.followUpAdvice ? (
+          <div className="rounded-xl bg-sky-50 p-4 text-base text-sky-900">
+            📅 复查建议：{result.followUpAdvice}
+          </div>
+        ) : null}
+      </div>
+
+      {/* ─── GoHerb CTA ─── */}
       <div className="mt-8">
         <GoHerbCTA overallRisk={result.overallRisk} />
       </div>
 
-      {/* Save PDF section */}
+      {/* ─── Save PDF ─── */}
       <div className="mt-6 rounded-2xl border-2 border-emerald-300 bg-emerald-50 p-6">
-        <h3 className="text-xl font-bold text-emerald-900">
-          📄 下载报告
-        </h3>
+        <h3 className="text-xl font-bold text-emerald-900">📄 下载报告</h3>
         <p className="mt-1 text-base text-emerald-900">
           PDF 报告将下载到你的下载文件夹
         </p>

@@ -9,6 +9,25 @@ import {
   getDurationInsight,
 } from "./malaysia-stats";
 import { getCitation } from "./citations";
+import { getRedFlags, type InsightModule } from "./answer-insights";
+
+function makeReportNumber(name: string, phone: string, iso: string): string {
+  const d = new Date(iso);
+  const pad = (x: number) => x.toString().padStart(2, "0");
+  const datePart = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}`;
+  let hash = 0;
+  const seed = name + phone + iso;
+  for (let i = 0; i < seed.length; i++) {
+    hash = (hash * 31 + seed.charCodeAt(i)) & 0xffff;
+  }
+  return `GH-${datePart}-${hash.toString().padStart(4, "0").slice(-4)}`;
+}
+
+const SYSTEM_TO_INSIGHT: Partial<Record<SystemKey, InsightModule>> = {
+  kidney: "kidney",
+  blood_pressure: "blood_pressure",
+  blood_sugar: "blood_sugar",
+};
 
 const FONT_REG = path.join(process.cwd(), "lib/fonts/NotoSansSC-Regular.otf");
 const FONT_BOLD = path.join(process.cwd(), "lib/fonts/NotoSansSC-Bold.otf");
@@ -97,12 +116,25 @@ function renderPdf(doc: PDFKit.PDFDocument, args: BuildPdfArgs) {
     hour: "2-digit",
     minute: "2-digit",
   });
+  const reportNo = makeReportNumber(
+    registration.name,
+    registration.phone,
+    registration.registeredAt
+  );
+  doc.text(`报告编号：${reportNo}`);
   doc.text(`姓名：${registration.name}`);
   doc.text(`电话：${registration.phone}`);
   doc.text(
     `年龄：${registration.age} 岁  ·  性别：${registration.gender === "male" ? "男" : "女"}`
   );
   doc.text(`报告日期：${reportDate}`);
+  doc
+    .fontSize(9)
+    .fillColor("#94a3b8")
+    .text(
+      "评估方法：根据 31 题健康问卷 + AI 分析 + 国际医学指南（KDIGO / MOH Malaysia / ADA / NHMS）",
+      { paragraphGap: 2 }
+    );
   doc.moveDown(1);
 
   // ── 整体评分 ──
@@ -295,7 +327,7 @@ function renderPdf(doc: PDFKit.PDFDocument, args: BuildPdfArgs) {
   for (const k of systemKeys) {
     const sys = result.systems[k];
     if (!sys) continue;
-    ensureSpace(doc, 180);
+    ensureSpace(doc, 230);
     const color = RISK_COLOR[sys.risk] ?? "#64748b";
 
     doc
@@ -312,6 +344,33 @@ function renderPdf(doc: PDFKit.PDFDocument, args: BuildPdfArgs) {
         .fontSize(11)
         .fillColor("#475569")
         .text(`💭  ${sys.visualMetaphor}`, { paragraphGap: 6 });
+    }
+
+    // ── 为什么是这个结果（红灯答案 → 结论）──
+    const insightModule = SYSTEM_TO_INSIGHT[k];
+    if (insightModule) {
+      const redFlags = getRedFlags(answers, insightModule);
+      if (redFlags.length > 0) {
+        doc
+          .font("zh-bold")
+          .fontSize(9)
+          .fillColor("#b45309")
+          .text("为什么是这个结果 — 你的回答：", { paragraphGap: 2 });
+        doc.font("zh").fontSize(9).fillColor("#64748b");
+        redFlags.slice(0, 6).forEach((f) => {
+          doc.text(`  ▸ ${f.shortText} → ${f.userAnswer}`, {
+            paragraphGap: 1,
+          });
+        });
+        doc.moveDown(0.2);
+      }
+      if (sys.causeEffect) {
+        doc
+          .font("zh-bold")
+          .fontSize(10)
+          .fillColor("#0f172a")
+          .text(`结论：${sys.causeEffect}`, { paragraphGap: 6 });
+      }
     }
 
     // Paragraph with **bold** markers — render bold parts with zh-bold

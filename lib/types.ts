@@ -49,6 +49,9 @@ export interface SystemAnalysis {
   // phrases that quote the user's actual answers. Salesperson reads this
   // aloud to the customer.
   paragraph: string;
+  // One-sentence cause-effect conclusion: quotes the user's red-flag answers
+  // and explains what those answers, combined, mean. Used in WhyThisResult.
+  causeEffect: string;
   // One actionable next-step recommendation
   recommendation: string;
   // The single citation key from CITATIONS library that supports this analysis

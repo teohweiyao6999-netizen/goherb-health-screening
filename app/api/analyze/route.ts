@@ -27,6 +27,11 @@ const SYSTEM_SCHEMA = {
       description:
         "2-4 句话的简洁段落，马来华语白话。引用用户具体的回答（用 **粗体** 包起来），让销售员读出来时听起来是基于客户的回复。例如：'你刚才说 **尿泡 3 分钟还散不掉**，加上 **夜尿 3 次**，这两个都是肾小球开始受损的早期信号。'",
     },
+    causeEffect: {
+      type: "string",
+      description:
+        "一句话因果结论，给「为什么是这个结果」区块用。要点：引用用户的红灯答案，讲清这几个答案合起来代表什么。例如：'尿泡多 + 夜尿频繁 + 腰酸，这 3 个加起来，是肾小球过滤功能开始下降的典型组合。' 低风险时写正面版：'这几项你都答得不错，代表肾脏目前的过滤功能还稳定。'",
+    },
     recommendation: {
       type: "string",
       description: "一句话明确建议下一步行动",
@@ -38,7 +43,14 @@ const SYSTEM_SCHEMA = {
         "从 citation 库里选一个最贴切的 key，作为科学依据。必须从枚举值里选，不可以编造。",
     },
   },
-  required: ["risk", "visualMetaphor", "paragraph", "recommendation", "citationKey"],
+  required: [
+    "risk",
+    "visualMetaphor",
+    "paragraph",
+    "causeEffect",
+    "recommendation",
+    "citationKey",
+  ],
 };
 
 const ANALYSIS_TOOL: Tool = {
