@@ -9,12 +9,12 @@ import {
 import { ALL_CITATION_KEYS } from "@/lib/citations";
 
 export const runtime = "nodejs";
-// Vercel Hobby caps functions at 60s. Sonnet 4.6 finishes 15-30s comfortably.
-export const maxDuration = 60;
+// Vercel Pro allows up to 300s. Opus 4.7 with detailed output finishes 30-60s.
+export const maxDuration = 300;
 
-// Sonnet 4.6 — balances quality and speed to fit within Vercel Hobby's
-// 60s function timeout. Opus 4.7 is more detailed but too slow for free tier.
-const MODEL = "claude-sonnet-4-6";
+// Opus 4.7 — highest quality for detailed health analysis.
+// Now that we're on Vercel Pro (300s function timeout), we can afford Opus.
+const MODEL = "claude-opus-4-7";
 
 const SYSTEM_SCHEMA = {
   type: "object",
@@ -28,7 +28,7 @@ const SYSTEM_SCHEMA = {
     paragraph: {
       type: "string",
       description:
-        "80-120 字段落。马来华语白话。必须引用 2 个以上用户回答（**粗体** 包起来）+ 简短解释生理机制 + 引用化验数值（如有）。不可少于 80 字，不可超过 130 字。",
+        "150-250 字的详细段落。马来华语白话。必须引用 3 个以上用户回答（**粗体** 包起来）+ 解释生理机制 + 引用化验数值（如有）+ 提及拖延时间。销售员要讲 1 分钟以上，必须有干货。不可少于 150 字。",
     },
     causeEffect: {
       type: "string",
@@ -122,7 +122,7 @@ export async function POST(req: Request) {
   try {
     const response = await client.messages.create({
       model: MODEL,
-      max_tokens: 6000,
+      max_tokens: 12000,
       system: [
         {
           type: "text",

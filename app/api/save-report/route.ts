@@ -5,7 +5,8 @@ import type { Registration, AnalysisResult, SymptomAnswer } from "@/lib/types";
 import type { LabValues } from "@/lib/lab-values";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+// Vercel Pro allows up to 300s. Puppeteer + Chromium cold start can take 15-30s.
+export const maxDuration = 300;
 
 interface Body {
   registration: Registration;
