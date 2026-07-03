@@ -9,12 +9,12 @@ import {
 import { ALL_CITATION_KEYS } from "@/lib/citations";
 
 export const runtime = "nodejs";
-export const maxDuration = 180;
+// Vercel Hobby caps functions at 60s. Sonnet 4.6 finishes 15-30s comfortably.
+export const maxDuration = 60;
 
-// Opus 4.7 — highest quality for detailed health analysis.
-// Tradeoff: slower (~30-50s) and pricier than Sonnet, but the report
-// quality is what the customer sees, so we don't skimp.
-const MODEL = "claude-opus-4-7";
+// Sonnet 4.6 — balances quality and speed to fit within Vercel Hobby's
+// 60s function timeout. Opus 4.7 is more detailed but too slow for free tier.
+const MODEL = "claude-sonnet-4-6";
 
 const SYSTEM_SCHEMA = {
   type: "object",
@@ -122,7 +122,7 @@ export async function POST(req: Request) {
   try {
     const response = await client.messages.create({
       model: MODEL,
-      max_tokens: 12000,
+      max_tokens: 8000,
       system: [
         {
           type: "text",

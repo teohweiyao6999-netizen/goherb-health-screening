@@ -669,7 +669,7 @@ export function buildReportHtml(args: Args): string {
   <div class="hdr">
     <div>
       <div class="hdr-title">GoHerb 健康风险评估报告</div>
-      <div class="hdr-sub">31 题问卷 + 体检数值 + Claude Opus 4.7 AI 分析</div>
+      <div class="hdr-sub">31 题问卷 + 体检数值 + Claude Sonnet 4.6 AI 分析</div>
     </div>
     <div class="hdr-right">
       <div class="hdr-name">${escapeHtml(registration.name)}</div>
@@ -774,7 +774,7 @@ export function buildReportHtml(args: Args): string {
   <div class="footer">
     <div><b>📖 科学依据：</b></div>
     ${citationsHtml}
-    <div style="margin-top: 1mm;">本报告由 AI（Claude Opus 4.7）根据问卷与体检数值生成，仅供健康参考，不构成医疗诊断或处方。如有疑虑请咨询注册医生。</div>
+    <div style="margin-top: 1mm;">本报告由 AI（Claude Sonnet 4.6）根据问卷与体检数值生成，仅供健康参考，不构成医疗诊断或处方。如有疑虑请咨询注册医生。</div>
   </div>
 
   </div>
