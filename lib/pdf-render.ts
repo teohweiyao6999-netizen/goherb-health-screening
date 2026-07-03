@@ -7,7 +7,7 @@
 //   (which bundles Chrome for Testing).
 // ════════════════════════════════════════════════════════════════
 
-import type { Browser, LaunchOptions } from "puppeteer-core";
+import type { Browser } from "puppeteer-core";
 
 const isProd = !!process.env.VERCEL || process.env.NODE_ENV === "production";
 
@@ -61,15 +61,20 @@ export async function renderHtmlToPdf(html: string): Promise<Buffer> {
 
 async function launchBrowser(): Promise<Browser> {
   if (isProd) {
+    // sparticuz/chromium v149+ recommended launch config
     const chromium = (await import("@sparticuz/chromium")).default;
     const puppeteerCore = await import("puppeteer-core");
-    const options: LaunchOptions = {
+
+    // Disable graphics mode to shrink footprint and avoid missing libs
+    chromium.setGraphicsMode = false;
+
+    const executablePath = await chromium.executablePath();
+
+    return (await puppeteerCore.launch({
       args: chromium.args,
-      defaultViewport: chromium.defaultViewport,
-      executablePath: await chromium.executablePath(),
+      executablePath,
       headless: true,
-    };
-    return (await puppeteerCore.launch(options)) as unknown as Browser;
+    })) as unknown as Browser;
   }
   const puppeteer = await import("puppeteer");
   return (await puppeteer.default.launch({
