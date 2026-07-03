@@ -1,15 +1,15 @@
 import PDFDocument from "pdfkit";
 import path from "path";
 import type { Registration, AnalysisResult, SymptomAnswer, SystemKey } from "./types";
-import { QUESTIONS, getModuleLabel } from "./questions";
-import {
-  MY_STATS,
-  URGENCY_FACTS,
-  getMalaysiaAverageScore,
-  getDurationInsight,
-} from "./malaysia-stats";
+import { MY_STATS } from "./malaysia-stats";
 import { getCitation } from "./citations";
 import { getRedFlags, type InsightModule } from "./answer-insights";
+import {
+  type LabValues,
+  summarizeLabs,
+  computeEGFR,
+  hasAnyLabValue,
+} from "./lab-values";
 
 function makeReportNumber(name: string, phone: string, iso: string): string {
   const d = new Date(iso);
@@ -23,47 +23,49 @@ function makeReportNumber(name: string, phone: string, iso: string): string {
   return `GH-${datePart}-${hash.toString().padStart(4, "0").slice(-4)}`;
 }
 
-const SYSTEM_TO_INSIGHT: Partial<Record<SystemKey, InsightModule>> = {
-  kidney: "kidney",
-  blood_pressure: "blood_pressure",
-  blood_sugar: "blood_sugar",
-};
-
 const FONT_REG = path.join(process.cwd(), "lib/fonts/NotoSansSC-Regular.otf");
 const FONT_BOLD = path.join(process.cwd(), "lib/fonts/NotoSansSC-Bold.otf");
 
 const SYSTEM_TITLES: Record<SystemKey, string> = {
-  kidney: "肾脏健康",
-  blood_pressure: "血压系统",
-  blood_sugar: "血糖系统",
-  lipids: "血脂系统",
+  kidney: "肾脏",
+  blood_pressure: "血压",
+  blood_sugar: "血糖",
+  lipids: "血脂",
 };
 
 const RISK_LABEL = {
   low: "低风险",
   medium: "中风险",
   high: "高风险",
-  unknown: "未评估",
+  unknown: "—",
 };
 
 const RISK_COLOR = {
   low: "#059669",
   medium: "#d97706",
   high: "#dc2626",
-  unknown: "#64748b",
+  unknown: "#94a3b8",
+};
+
+const RISK_BG = {
+  low: "#ecfdf5",
+  medium: "#fffbeb",
+  high: "#fef2f2",
+  unknown: "#f8fafc",
 };
 
 interface BuildPdfArgs {
   registration: Registration;
   answers: Record<string, SymptomAnswer>;
   result: AnalysisResult;
+  labValues?: LabValues;
 }
 
 export function buildPdfBuffer(args: BuildPdfArgs): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({
       size: "A4",
-      margin: 50,
+      margin: 28, // tighter margin for 1-page
       info: {
         Title: `GoHerb 健康风险报告 - ${args.registration.name}`,
         Author: "GoHerb 护肾王",
@@ -84,495 +86,471 @@ export function buildPdfBuffer(args: BuildPdfArgs): Promise<Buffer> {
   });
 }
 
-function renderPdf(doc: PDFKit.PDFDocument, args: BuildPdfArgs) {
-  const { registration, answers, result } = args;
+// ════════════════════════════════════════════════════════════════
+// SINGLE-PAGE A4 LAYOUT
+// ════════════════════════════════════════════════════════════════
+//
+// Layout:
+// ┌─────────────────────────────────────────────────────────┐
+// │ [Brand Bar]  GoHerb 健康风险评估报告                     │
+// │                                                          │
+// │ Header: 姓名/编号/日期   |   整体评分大圆环  +  风险条    │
+// │                                                          │
+// │ 3 系统 mini gauge: [肾] [血压] [血糖]                    │
+// │                                                          │
+// │ ┌── 左栏 ────────────┐  ┌── 右栏 ─────────────┐         │
+// │ │ 为什么是这个结果?    │  │ 体检数值 + eGFR     │         │
+// │ │ ▸ 关键发现 3-5 条   │  │ (或马来西亚数据)     │         │
+// │ └────────────────────┘  └─────────────────────┘         │
+// │                                                          │
+// │ 该怎么办? 3 条具体行动                                    │
+// │                                                          │
+// │ 4 条马来西亚关键数据 (mini stats bar)                     │
+// │                                                          │
+// │ Footer: WhatsApp + Citation + Disclaimer                 │
+// └─────────────────────────────────────────────────────────┘
 
-  // ── Header ──
+const PAGE_W = 595;
+const MARGIN = 28;
+const CONTENT_W = PAGE_W - 2 * MARGIN; // 539
+const COL_GAP = 12;
+const COL_W = (CONTENT_W - COL_GAP) / 2; // 263.5
+
+function renderPdf(doc: PDFKit.PDFDocument, args: BuildPdfArgs) {
+  const { registration, result, labValues } = args;
+
+  // ─── 1. Brand bar (top green strip) ────────────────────────────
+  doc.rect(0, 0, PAGE_W, 8).fill("#059669");
+  doc.rect(0, 8, PAGE_W, 4).fill("#10b981");
+
+  // ─── 2. Title row ──────────────────────────────────────────────
+  let y = 20;
   doc
     .font("zh-bold")
-    .fontSize(22)
-    .fillColor("#059669")
-    .text("GoHerb 健康风险评估报告", { align: "center" });
+    .fontSize(16)
+    .fillColor("#065f46")
+    .text("GoHerb 健康风险评估报告", MARGIN, y, { width: CONTENT_W });
   doc
     .font("zh")
-    .fontSize(10)
+    .fontSize(7.5)
     .fillColor("#64748b")
-    .text("AI 健康风险筛查 · 仅供参考，不构成医疗诊断", { align: "center" });
+    .text(
+      "AI 健康风险筛查 · 仅供参考，不构成医疗诊断",
+      MARGIN,
+      y + 20,
+      { width: CONTENT_W }
+    );
 
-  doc.moveDown(1.5);
-
-  // ── 客户资料 ──
-  doc
-    .fillColor("#0f172a")
-    .font("zh-bold")
-    .fontSize(13)
-    .text("客户资料", { underline: false });
-  doc.moveDown(0.3);
-  doc.font("zh").fontSize(11).fillColor("#334155");
-  const reportDate = new Date().toLocaleString("zh-CN", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  // ─── 3. Header info + overall score (2-col) ────────────────────
+  y = 50;
   const reportNo = makeReportNumber(
     registration.name,
     registration.phone,
     registration.registeredAt
   );
-  doc.text(`报告编号：${reportNo}`);
-  doc.text(`姓名：${registration.name}`);
-  doc.text(`电话：${registration.phone}`);
-  doc.text(
-    `年龄：${registration.age} 岁  ·  性别：${registration.gender === "male" ? "男" : "女"}`
-  );
-  doc.text(`报告日期：${reportDate}`);
-  doc
-    .fontSize(9)
-    .fillColor("#94a3b8")
-    .text(
-      "评估方法：根据 31 题健康问卷 + AI 分析 + 国际医学指南（KDIGO / MOH Malaysia / ADA / NHMS）",
-      { paragraphGap: 2 }
-    );
-  doc.moveDown(1);
-
-  // ── 整体评分 ──
-  doc
-    .font("zh-bold")
-    .fontSize(13)
-    .fillColor("#0f172a")
-    .text("整体风险评分");
-  doc.moveDown(0.3);
-
-  const overallColor = RISK_COLOR[result.overallRisk] ?? "#64748b";
-  doc
-    .font("zh-bold")
-    .fontSize(36)
-    .fillColor(overallColor)
-    .text(`${result.overallScore} / 100`, { continued: false });
-  doc
-    .font("zh-bold")
-    .fontSize(14)
-    .fillColor(overallColor)
-    .text(`${RISK_LABEL[result.overallRisk] ?? ""}`);
-
-  // Progress bar
-  const barY = doc.y + 6;
-  const barX = 50;
-  const barW = doc.page.width - 100;
-  doc.rect(barX, barY, barW, 12).fill("#e2e8f0");
-  const filled = Math.max(0, Math.min(100, result.overallScore)) / 100;
-  doc.rect(barX, barY, barW * filled, 12).fill(overallColor);
-  doc.fillColor("#0f172a");
-  doc.y = barY + 24;
-  doc.moveDown(1);
-
-  // ── 各系统简要 ──
-  const systemKeys = Object.keys(result.systems) as SystemKey[];
-  if (systemKeys.length) {
-    doc
-      .font("zh-bold")
-      .fontSize(13)
-      .fillColor("#0f172a")
-      .text("各系统风险");
-    doc.moveDown(0.3);
-    for (const k of systemKeys) {
-      const sys = result.systems[k];
-      if (!sys) continue;
-      const color = RISK_COLOR[sys.risk] ?? "#64748b";
-      doc.font("zh").fontSize(11).fillColor("#334155");
-      doc.text(`${SYSTEM_TITLES[k]}：`, { continued: true });
-      doc.fillColor(color).text(RISK_LABEL[sys.risk] ?? "");
-    }
-    doc.moveDown(0.5);
-  }
-
-  // ── 健康画像 vs 马来西亚平均 ──
-  const avg = getMalaysiaAverageScore(registration.age);
-  const diff = result.overallScore - avg.overall;
-  ensureSpace(doc, 100);
-  doc
-    .font("zh-bold")
-    .fontSize(13)
-    .fillColor("#0f172a")
-    .text("📊 你 vs 马来西亚同龄人");
-  doc.moveDown(0.3);
-  doc.font("zh").fontSize(10).fillColor("#475569");
-  doc.text(
-    `同年龄段（${registration.age} 岁）马来西亚成人平均风险评分：${avg.overall} / 100`
-  );
-  doc.text(`你的评分：${result.overallScore} / 100`);
-  if (diff > 15) {
-    doc
-      .font("zh-bold")
-      .fontSize(11)
-      .fillColor("#dc2626")
-      .text(`⚠ 你的风险比同龄人高出 ${diff} 分，超出正常范围`);
-  } else if (diff > 0) {
-    doc
-      .font("zh-bold")
-      .fontSize(11)
-      .fillColor("#d97706")
-      .text(`⚠ 你的风险略高于同龄平均（高 ${diff} 分）`);
-  } else {
-    doc
-      .font("zh-bold")
-      .fontSize(11)
-      .fillColor("#059669")
-      .text(`✓ 你的风险低于同龄平均（低 ${Math.abs(diff)} 分）`);
-  }
-  doc.moveDown(0.6);
-
-  // ── 30 题亮灯地图 ──
-  ensureSpace(doc, 100);
-  doc
-    .font("zh-bold")
-    .fontSize(13)
-    .fillColor("#0f172a")
-    .text("🗺 你的 30 题亮灯地图");
-  doc.moveDown(0.3);
-  doc.font("zh").fontSize(10).fillColor("#475569");
-  const moduleOrder: SystemKey[] = ["kidney", "blood_pressure", "blood_sugar"];
-  for (const m of moduleOrder) {
-    const qs = QUESTIONS.filter((q) => q.module === m);
-    const red = qs.filter((q) => (answers[q.id]?.score ?? 0) >= 2).length;
-    const yellow = qs.filter((q) => (answers[q.id]?.score ?? 0) === 1).length;
-    const green = qs.length - red - yellow;
-    doc.text(
-      `${SYSTEM_TITLES[m]}（${qs.length} 题）：🔴 ${red} 颗 · 🟡 ${yellow} 颗 · 🟢 ${green} 颗`
-    );
-  }
-  const lifeQs = QUESTIONS.filter((q) => q.module === "lifestyle");
-  const lifeRed = lifeQs.filter((q) => (answers[q.id]?.score ?? 0) >= 2).length;
-  const lifeYellow = lifeQs.filter((q) => (answers[q.id]?.score ?? 0) === 1).length;
-  const lifeGreen = lifeQs.length - lifeRed - lifeYellow;
-  doc.text(
-    `生活习惯（${lifeQs.length} 题）：🔴 ${lifeRed} 颗 · 🟡 ${lifeYellow} 颗 · 🟢 ${lifeGreen} 颗`
-  );
-  doc.moveDown(0.6);
-
-  // ── 拖延时间洞察 ──
-  const durationAnswer = answers["duration"];
-  if (durationAnswer) {
-    const durationValue =
-      durationAnswer.answer === "还没特别注意过"
-        ? "none"
-        : durationAnswer.answer === "最近一两个月才开始"
-          ? "1-2_months"
-          : durationAnswer.answer === "已经 3–6 个月了"
-            ? "3-6_months"
-            : durationAnswer.answer === "超过半年，但都拖着没处理"
-              ? "6-12_months"
-              : "over_1_year";
-    const insight = getDurationInsight(durationValue);
-    if (insight.message) {
-      ensureSpace(doc, 60);
-      doc
-        .font("zh-bold")
-        .fontSize(12)
-        .fillColor("#0f172a")
-        .text("⏰ 你的健康时间线");
-      doc.moveDown(0.2);
-      doc
-        .font("zh")
-        .fontSize(10)
-        .fillColor(
-          insight.level === "very_late" || insight.level === "late"
-            ? "#dc2626"
-            : insight.level === "moderate"
-              ? "#d97706"
-              : "#0c4a6e"
-        )
-        .text(insight.message);
-      doc.moveDown(0.6);
-    }
-  }
-
-  // ── 4 个月修复期重点 ──
-  ensureSpace(doc, 80);
-  doc
-    .font("zh-bold")
-    .fontSize(12)
-    .fillColor("#059669")
-    .text("🌱 关键期：未来 4 个月");
-  doc.moveDown(0.2);
-  doc
-    .font("zh")
-    .fontSize(10)
-    .fillColor("#334155")
-    .text(
-      "肾脏的修复是慢工出细活 — 一般需要持续保养 3–6 个月（建议至少 4 个月）才看得到改变。这段时间是黄金期，过了就要更长时间才能逆转。",
-      { paragraphGap: 4 }
-    );
-  doc.moveDown(0.5);
-
-  // ── 最需要关注 ──
-  if (result.topConcerns?.length) {
-    ensureSpace(doc, 100);
-    doc
-      .font("zh-bold")
-      .fontSize(13)
-      .fillColor("#dc2626")
-      .text("⚠ 最需要立刻关注");
-    doc.moveDown(0.3);
-    doc.font("zh").fontSize(11).fillColor("#334155");
-    result.topConcerns.forEach((c, i) => {
-      doc.text(`${i + 1}. ${c}`, { indent: 0, paragraphGap: 4 });
-    });
-    doc.moveDown(0.5);
-  }
-
-  // ── 各系统详细 ──
-  for (const k of systemKeys) {
-    const sys = result.systems[k];
-    if (!sys) continue;
-    ensureSpace(doc, 230);
-    const color = RISK_COLOR[sys.risk] ?? "#64748b";
-
-    doc
-      .font("zh-bold")
-      .fontSize(13)
-      .fillColor("#0f172a")
-      .text(`${SYSTEM_TITLES[k]}  ·  `, { continued: true });
-    doc.fillColor(color).text(RISK_LABEL[sys.risk]);
-    doc.moveDown(0.2);
-
-    if (sys.visualMetaphor) {
-      doc
-        .font("zh")
-        .fontSize(11)
-        .fillColor("#475569")
-        .text(`💭  ${sys.visualMetaphor}`, { paragraphGap: 6 });
-    }
-
-    // ── 为什么是这个结果（红灯答案 → 结论）──
-    const insightModule = SYSTEM_TO_INSIGHT[k];
-    if (insightModule) {
-      const redFlags = getRedFlags(answers, insightModule);
-      if (redFlags.length > 0) {
-        doc
-          .font("zh-bold")
-          .fontSize(9)
-          .fillColor("#b45309")
-          .text("为什么是这个结果 — 你的回答：", { paragraphGap: 2 });
-        doc.font("zh").fontSize(9).fillColor("#64748b");
-        redFlags.slice(0, 6).forEach((f) => {
-          doc.text(`  ▸ ${f.shortText} → ${f.userAnswer}`, {
-            paragraphGap: 1,
-          });
-        });
-        doc.moveDown(0.2);
-      }
-      if (sys.causeEffect) {
-        doc
-          .font("zh-bold")
-          .fontSize(10)
-          .fillColor("#0f172a")
-          .text(`结论：${sys.causeEffect}`, { paragraphGap: 6 });
-      }
-    }
-
-    // Paragraph with **bold** markers — render bold parts with zh-bold
-    if (sys.paragraph) {
-      renderMarkdownParagraph(doc, sys.paragraph);
-      doc.moveDown(0.3);
-    }
-
-    if (sys.recommendation) {
-      doc
-        .font("zh-bold")
-        .fontSize(10)
-        .fillColor("#0f172a")
-        .text("👉 建议：", { continued: true });
-      doc.font("zh").fillColor("#334155").text(sys.recommendation);
-      doc.moveDown(0.3);
-    }
-
-    // Citation (full)
-    if (sys.citationKey) {
-      const citation = getCitation(sys.citationKey);
-      if (citation) {
-        doc
-          .font("zh-bold")
-          .fontSize(8)
-          .fillColor("#94a3b8")
-          .text("📖 科学依据：", { continued: true });
-        doc.font("zh").fillColor("#64748b").text(citation.full, { paragraphGap: 2 });
-        if (citation.url) {
-          doc.font("zh").fontSize(7).fillColor("#059669").text(citation.url, {
-            link: citation.url,
-            underline: true,
-          });
-        }
-      }
-    }
-    doc.moveDown(0.5);
-  }
-
-  // ── 行动建议 ──
-  if (result.immediateActions?.length) {
-    ensureSpace(doc, 100);
-    doc
-      .font("zh-bold")
-      .fontSize(13)
-      .fillColor("#0f172a")
-      .text("✓ 今天就可以做的事");
-    doc.moveDown(0.3);
-    doc.font("zh").fontSize(11).fillColor("#334155");
-    result.immediateActions.forEach((a) => {
-      doc.text(`• ${a}`, { indent: 0, paragraphGap: 4 });
-    });
-    doc.moveDown(0.5);
-  }
-
-  if (result.lifestyleAdvice?.length) {
-    ensureSpace(doc, 100);
-    doc
-      .font("zh-bold")
-      .fontSize(13)
-      .fillColor("#0f172a")
-      .text("🌿 长期生活建议");
-    doc.moveDown(0.3);
-    doc.font("zh").fontSize(11).fillColor("#334155");
-    result.lifestyleAdvice.forEach((a) => {
-      doc.text(`• ${a}`, { indent: 0, paragraphGap: 4 });
-    });
-    doc.moveDown(0.5);
-  }
-
-  if (result.followUpAdvice) {
-    doc.font("zh").fontSize(11).fillColor("#0c4a6e");
-    doc.text(`📅 复查建议：${result.followUpAdvice}`);
-    doc.moveDown(0.5);
-  }
-
-  // ── 30 题原始答案 ──
-  doc.addPage();
-  doc.font("zh-bold").fontSize(14).fillColor("#0f172a").text("附录：30 题完整答案");
-  doc.moveDown(0.5);
-
-  let lastModule = "";
-  for (let i = 0; i < QUESTIONS.length; i++) {
-    const q = QUESTIONS[i];
-    const a = answers[q.id];
-    if (q.module !== lastModule) {
-      lastModule = q.module;
-      doc.moveDown(0.3);
-      doc
-        .font("zh-bold")
-        .fontSize(12)
-        .fillColor("#059669")
-        .text(`【${getModuleLabel(q.module)}】`);
-    }
-    doc.font("zh").fontSize(10).fillColor("#334155");
-    doc.text(`${i + 1}. ${q.text}`, { paragraphGap: 1 });
-    const score = a?.score ?? 0;
-    const dotColor = score >= 2 ? "#dc2626" : score === 1 ? "#d97706" : "#059669";
-    doc
-      .font("zh")
-      .fontSize(10)
-      .fillColor(dotColor)
-      .text(`   答：${a?.answer ?? "未作答"}`, { paragraphGap: 4 });
-  }
-
-  // ── 马来西亚健康事实 ──
-  doc.addPage();
-  doc
-    .font("zh-bold")
-    .fontSize(14)
-    .fillColor("#0f172a")
-    .text("📍 马来西亚健康事实");
-  doc.moveDown(0.3);
-  doc.font("zh").fontSize(10).fillColor("#334155");
-  doc.text(`🫘 ${MY_STATS.ckd.fact}`, { paragraphGap: 4 });
-  doc
-    .fontSize(8)
-    .fillColor("#94a3b8")
-    .text(`   来源：${MY_STATS.ckd.source}`, { paragraphGap: 6 });
-  doc
-    .fontSize(10)
-    .fillColor("#334155")
-    .text(`🩸 ${MY_STATS.diabetes.fact}`, { paragraphGap: 4 });
-  doc
-    .fontSize(8)
-    .fillColor("#94a3b8")
-    .text(`   来源：${MY_STATS.diabetes.source}`, { paragraphGap: 6 });
-  doc
-    .fontSize(10)
-    .fillColor("#334155")
-    .text(`❤️ ${MY_STATS.hypertension.fact}`, { paragraphGap: 4 });
-  doc
-    .fontSize(8)
-    .fillColor("#94a3b8")
-    .text(`   来源：${MY_STATS.hypertension.source}`, { paragraphGap: 6 });
-  doc
-    .fontSize(10)
-    .fillColor("#334155")
-    .text(`💉 ${MY_STATS.dialysis.fact}`, { paragraphGap: 4 });
-  doc
-    .fontSize(8)
-    .fillColor("#94a3b8")
-    .text(`   来源：${MY_STATS.dialysis.source}`, { paragraphGap: 6 });
-
-  doc.moveDown(0.5);
-  doc
-    .font("zh-bold")
-    .fontSize(12)
-    .fillColor("#0f172a")
-    .text("💡 你应该知道的事实");
-  doc.moveDown(0.3);
-  for (const f of URGENCY_FACTS) {
-    doc.font("zh").fontSize(10).fillColor("#334155");
-    doc.text(`${f.icon}  ${f.fact}`, { paragraphGap: 2 });
-    doc
-      .fontSize(8)
-      .fillColor("#94a3b8")
-      .text(`   来源：${f.source}`, { paragraphGap: 6 });
-  }
-
-  // ── Footer / disclaimer ──
-  doc.moveDown(1);
-  doc
-    .font("zh")
-    .fontSize(9)
-    .fillColor("#64748b")
-    .text(
-      result.disclaimer ||
-        "本报告由 AI 根据用户填写的问卷生成，仅供参考，不构成医疗诊断、治疗建议或处方。如有任何健康疑虑，请咨询注册医生。",
-      { align: "justify", paragraphGap: 4 }
-    );
-
-  doc.moveDown(0.5);
-  doc
-    .font("zh-bold")
-    .fontSize(10)
-    .fillColor("#059669")
-    .text("GoHerb 护肾王 · 守护你的肾脏健康", { align: "center" });
-}
-
-function ensureSpace(doc: PDFKit.PDFDocument, needed: number) {
-  if (doc.y + needed > doc.page.height - doc.page.margins.bottom) {
-    doc.addPage();
-  }
-}
-
-// Renders a paragraph that uses **bold** markdown markers.
-// Bold parts get the zh-bold font + a yellow highlight background.
-function renderMarkdownParagraph(doc: PDFKit.PDFDocument, text: string) {
-  const parts = text.split(/(\*\*[^*]+\*\*)/g).filter((p) => p.length > 0);
-  doc.font("zh").fontSize(11).fillColor("#0f172a");
-  parts.forEach((part, idx) => {
-    const isLast = idx === parts.length - 1;
-    if (part.startsWith("**") && part.endsWith("**")) {
-      const inner = part.slice(2, -2);
-      doc.font("zh-bold").fillColor("#b45309").text(inner, {
-        continued: !isLast,
-      });
-    } else {
-      doc.font("zh").fillColor("#0f172a").text(part, {
-        continued: !isLast,
-      });
-    }
+  const reportDate = new Date().toLocaleDateString("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
   });
+
+  // Left: client info
+  doc.font("zh-bold").fontSize(8).fillColor("#475569");
+  doc.text("客户资料", MARGIN, y);
+  doc.font("zh").fontSize(9).fillColor("#0f172a");
+  doc.text(`姓名：${registration.name}`, MARGIN, y + 12);
+  doc.text(
+    `${registration.age}岁 · ${registration.gender === "male" ? "男" : "女"} · ${registration.phone}`,
+    MARGIN,
+    y + 25
+  );
+  doc.font("zh").fontSize(8).fillColor("#64748b");
+  doc.text(`报告编号：${reportNo}`, MARGIN, y + 38);
+  doc.text(`日期：${reportDate}`, MARGIN, y + 49);
+
+  // Right: overall score circle + bar
+  const overallColor = RISK_COLOR[result.overallRisk] ?? "#94a3b8";
+  const overallBg = RISK_BG[result.overallRisk] ?? "#f8fafc";
+
+  const rightX = MARGIN + COL_W + COL_GAP;
+  // background card
+  doc
+    .roundedRect(rightX, y - 6, COL_W, 68, 6)
+    .fillColor(overallBg)
+    .fill();
+  // Circle gauge
+  drawRingGauge(
+    doc,
+    rightX + 35,
+    y + 28,
+    24,
+    result.overallScore,
+    100,
+    overallColor
+  );
+  doc.font("zh-bold").fontSize(14).fillColor(overallColor);
+  const scoreText = `${result.overallScore}`;
+  const scoreW = doc.widthOfString(scoreText);
+  doc.text(scoreText, rightX + 35 - scoreW / 2, y + 22);
+  doc.font("zh").fontSize(6).fillColor("#64748b");
+  const small = "/100";
+  const smallW = doc.widthOfString(small);
+  doc.text(small, rightX + 35 - smallW / 2, y + 38);
+
+  // Label + risk
+  doc.font("zh-bold").fontSize(10).fillColor(overallColor);
+  doc.text("整体风险评分", rightX + 72, y);
+  doc.font("zh-bold").fontSize(14).fillColor(overallColor);
+  doc.text(RISK_LABEL[result.overallRisk], rightX + 72, y + 14);
+  // Risk progress bar
+  const barX = rightX + 72;
+  const barW = COL_W - 80;
+  const barY = y + 38;
+  doc.roundedRect(barX, barY, barW, 6, 3).fillColor("#e2e8f0").fill();
+  const fillPct = Math.max(
+    0,
+    Math.min(1, result.overallScore / 100)
+  );
+  doc
+    .roundedRect(barX, barY, barW * fillPct, 6, 3)
+    .fillColor(overallColor)
+    .fill();
+  doc.font("zh").fontSize(6.5).fillColor("#64748b");
+  doc.text("低 0 — 100 高", barX, barY + 9);
+
+  // ─── 4. 3 system mini gauges ───────────────────────────────────
+  y = 130;
+  const systemKeys: SystemKey[] = ["kidney", "blood_pressure", "blood_sugar"];
+  const gaugeW = CONTENT_W / 3 - 6;
+
+  systemKeys.forEach((k, i) => {
+    const sys = result.systems[k];
+    const risk = sys?.risk ?? "unknown";
+    const color = RISK_COLOR[risk];
+    const bg = RISK_BG[risk];
+    const x = MARGIN + i * (gaugeW + 9);
+
+    doc.roundedRect(x, y, gaugeW, 56, 5).fillColor(bg).fill();
+    doc.font("zh-bold").fontSize(8).fillColor("#475569");
+    doc.text(SYSTEM_TITLES[k], x + 10, y + 6);
+
+    // mini ring
+    const score =
+      risk === "high" ? 85 : risk === "medium" ? 55 : risk === "low" ? 20 : 0;
+    drawRingGauge(doc, x + 24, y + 34, 14, score, 100, color);
+    // risk label inside
+    const rl = RISK_LABEL[risk];
+    doc.font("zh-bold").fontSize(7).fillColor(color);
+    const rlW = doc.widthOfString(rl);
+    doc.text(rl, x + 24 - rlW / 2, y + 30);
+
+    // small description right of ring
+    doc.font("zh").fontSize(7).fillColor("#64748b");
+    const desc =
+      risk === "high"
+        ? "需立刻关注"
+        : risk === "medium"
+          ? "开始亮黄灯"
+          : risk === "low"
+            ? "目前稳定"
+            : "未评估";
+    doc.text(desc, x + 46, y + 30, { width: gaugeW - 50 });
+  });
+
+  // ─── 5. Two-column body (左：为什么 / 右：体检数值 or 数据) ────
+  y = 200;
+  const leftX = MARGIN;
+  const rightColX = MARGIN + COL_W + COL_GAP;
+
+  // ── Left column: Why this result (top concerns + key red flags) ──
+  const leftYStart = y;
+  doc.font("zh-bold").fontSize(10).fillColor("#0f172a");
+  doc.text("⚠ 为什么是这个结果？", leftX, y);
+  doc.y = y + 14;
+
+  // Pull the top 4-5 red flags across all 3 systems
+  const allRedFlags: { module: string; short: string; ans: string }[] = [];
+  for (const m of ["kidney", "blood_pressure", "blood_sugar"] as InsightModule[]) {
+    const flags = getRedFlags(args.answers, m);
+    for (const f of flags) {
+      allRedFlags.push({
+        module: m,
+        short: f.shortText,
+        ans: f.userAnswer,
+      });
+    }
+  }
+  // Take top 5 (already sorted by score desc within module)
+  const topFlags = allRedFlags.slice(0, 5);
+
+  if (topFlags.length > 0) {
+    doc.font("zh").fontSize(8.5).fillColor("#475569");
+    doc.text("最关键的风险信号：", leftX, doc.y, { width: COL_W });
+    doc.moveDown(0.2);
+    for (const f of topFlags) {
+      const dotY = doc.y + 4;
+      doc.circle(leftX + 4, dotY, 2).fillColor("#dc2626").fill();
+      doc.font("zh").fontSize(8.5).fillColor("#0f172a");
+      doc.text(`${f.short} → `, leftX + 12, doc.y, {
+        continued: true,
+        width: COL_W - 12,
+      });
+      doc.font("zh-bold").fillColor("#b45309");
+      doc.text(f.ans, { width: COL_W - 12 });
+      doc.font("zh");
+    }
+  } else {
+    doc.font("zh").fontSize(8.5).fillColor("#475569");
+    doc.text(
+      "目前没有明显高风险信号。继续保持健康生活方式，定期复查就好。",
+      leftX,
+      doc.y,
+      { width: COL_W }
+    );
+    doc.moveDown(0.3);
+  }
+
+  // Top concerns (1-2 lines)
+  if (result.topConcerns?.length) {
+    doc.moveDown(0.3);
+    doc.font("zh-bold").fontSize(8).fillColor("#475569");
+    doc.text("AI 总结：", leftX, doc.y, { width: COL_W });
+    doc.font("zh").fontSize(8.5).fillColor("#0f172a");
+    const concern = result.topConcerns[0];
+    doc.text(concern, leftX, doc.y, { width: COL_W });
+  }
+
+  const leftYEnd = doc.y;
+
+  // ── Right column: Lab values OR Malaysia stats ──
+  doc.font("zh-bold").fontSize(10).fillColor("#0f172a");
+  doc.text("📋 体检数值", rightColX, leftYStart);
+  doc.y = leftYStart + 14;
+
+  const hasLabs = labValues && hasAnyLabValue(labValues);
+  if (hasLabs) {
+    const summary = summarizeLabs(labValues!, registration.gender);
+    doc.font("zh").fontSize(7.5).fillColor("#64748b");
+    // Mini header
+    const labY0 = doc.y;
+    doc.text("指标", rightColX, labY0, { width: 105 });
+    doc.text("数值", rightColX + 105, labY0, { width: 60 });
+    doc.text("评估", rightColX + 165, labY0, { width: COL_W - 165 });
+    doc
+      .moveTo(rightColX, labY0 + 10)
+      .lineTo(rightColX + COL_W, labY0 + 10)
+      .strokeColor("#e2e8f0")
+      .stroke();
+    doc.y = labY0 + 13;
+
+    for (const item of summary) {
+      const rowY = doc.y;
+      const c = RISK_COLOR[item.check.level];
+      doc.font("zh").fontSize(8).fillColor("#334155");
+      doc.text(item.label, rightColX, rowY, { width: 105 });
+      doc.font("zh-bold").fillColor(c);
+      doc.text(`${item.value} ${item.unit}`, rightColX + 105, rowY, {
+        width: 60,
+      });
+      doc.font("zh").fontSize(7.5).fillColor(c);
+      doc.text(item.check.label, rightColX + 165, rowY, {
+        width: COL_W - 165,
+      });
+      doc.y = rowY + 12;
+    }
+
+    const egfr = computeEGFR(labValues!, registration.age, registration.gender);
+    if (egfr) {
+      doc.moveDown(0.2);
+      const egfrColor = RISK_COLOR[egfr.risk];
+      const egfrY = doc.y;
+      doc
+        .roundedRect(rightColX, egfrY, COL_W, 28, 4)
+        .fillColor("#ecfdf5")
+        .fill();
+      doc.font("zh-bold").fontSize(8).fillColor("#065f46");
+      doc.text("🧮 eGFR", rightColX + 6, egfrY + 4);
+      doc.font("zh-bold").fontSize(13).fillColor(egfrColor);
+      doc.text(`${egfr.egfr}`, rightColX + 6, egfrY + 14, { continued: true });
+      doc.font("zh").fontSize(7).fillColor("#065f46");
+      doc.text(`  mL/min  ·  ${egfr.label}`);
+      doc.y = egfrY + 32;
+    }
+  } else {
+    doc.font("zh").fontSize(8.5).fillColor("#64748b");
+    doc.text(
+      "客户未提供化验数值。本次评估基于症状问卷。建议下次带体检报告，可获得更精准的数值分析（包括 eGFR 自动计算）。",
+      rightColX,
+      leftYStart + 14,
+      { width: COL_W }
+    );
+    doc.moveDown(0.4);
+    // small Malaysia fact instead
+    doc.font("zh-bold").fontSize(8).fillColor("#7f1d1d");
+    doc.text("📍 马来西亚现况", rightColX, doc.y);
+    doc.font("zh").fontSize(7.5).fillColor("#475569");
+    doc.text(`🫘 ${MY_STATS.ckd.fact}`, rightColX, doc.y + 2, {
+      width: COL_W,
+    });
+    doc.moveDown(0.2);
+    doc.text(`🩸 ${MY_STATS.diabetes.fact}`, rightColX, doc.y, {
+      width: COL_W,
+    });
+    doc.moveDown(0.2);
+    doc.text(`❤️ ${MY_STATS.hypertension.fact}`, rightColX, doc.y, {
+      width: COL_W,
+    });
+  }
+
+  const rightYEnd = doc.y;
+  const bodyBottomY = Math.max(leftYEnd, rightYEnd) + 8;
+
+  // ─── 6. Action steps (3 specific) ──────────────────────────────
+  y = Math.max(bodyBottomY, 405);
+  doc
+    .roundedRect(MARGIN, y, CONTENT_W, 70, 6)
+    .fillColor("#f0fdf4")
+    .fill();
+  doc.font("zh-bold").fontSize(10).fillColor("#065f46");
+  doc.text("✅ 该怎么办？— 今天就可以做的事", MARGIN + 8, y + 6);
+
+  const actions = (result.immediateActions ?? []).slice(0, 3);
+  if (actions.length === 0) {
+    doc.font("zh").fontSize(8.5).fillColor("#0f172a");
+    doc.text("保持良好生活习惯，定期复查。", MARGIN + 8, y + 22);
+  } else {
+    actions.forEach((a, i) => {
+      const aY = y + 22 + i * 14;
+      doc.font("zh-bold").fontSize(8.5).fillColor("#059669");
+      doc.text(`${i + 1}.`, MARGIN + 8, aY, { continued: true });
+      doc.font("zh").fillColor("#0f172a");
+      doc.text(` ${a}`, { width: CONTENT_W - 16 });
+    });
+  }
+
+  // followUpAdvice (small)
+  if (result.followUpAdvice) {
+    doc.font("zh").fontSize(7).fillColor("#65a30d");
+    doc.text(
+      `📅 ${result.followUpAdvice}`,
+      MARGIN + 8,
+      y + 60,
+      { width: CONTENT_W - 16 }
+    );
+  }
+
+  // ─── 7. Malaysia mini-stats bar (if labs were shown, this still goes here) ─
+  y = y + 78;
+  doc
+    .roundedRect(MARGIN, y, CONTENT_W, 26, 4)
+    .fillColor("#fef3c7")
+    .fill();
+  doc.font("zh-bold").fontSize(7).fillColor("#78350f");
+  doc.text("📍 你正在马来西亚的「沉默杀手」名单上", MARGIN + 8, y + 5);
+  doc.font("zh").fontSize(7).fillColor("#7c2d12");
+  doc.text(
+    `${MY_STATS.ckd.ratio} 有 CKD · ${MY_STATS.diabetes.ratio} 有糖尿病 · ${MY_STATS.hypertension.ratio} 有高血压 · 每 25 分钟 1 人新患肾衰竭`,
+    MARGIN + 8,
+    y + 16,
+    { width: CONTENT_W - 16 }
+  );
+
+  // ─── 8. WhatsApp CTA + Footer (bottom) ─────────────────────────
+  y = y + 32;
+  const wa = process.env.NEXT_PUBLIC_WHATSAPP_NUMBER ?? "60123456789";
+  doc
+    .roundedRect(MARGIN, y, CONTENT_W, 24, 4)
+    .fillColor("#059669")
+    .fill();
+  doc.font("zh-bold").fontSize(9).fillColor("#ffffff");
+  doc.text(
+    `💬 想了解护肾王怎么帮你？  WhatsApp：${wa}`,
+    MARGIN + 8,
+    y + 7,
+    { width: CONTENT_W - 16, align: "center" }
+  );
+
+  // ─── 9. Footer disclaimer + citations ──────────────────────────
+  y = y + 30;
+
+  // Collect unique citation shorts from systems
+  const citationShorts = new Set<string>();
+  for (const k of ["kidney", "blood_pressure", "blood_sugar"] as SystemKey[]) {
+    const sys = result.systems[k];
+    if (sys?.citationKey) {
+      const c = getCitation(sys.citationKey);
+      if (c) citationShorts.add(c.short);
+    }
+  }
+
+  doc.font("zh").fontSize(6.5).fillColor("#94a3b8");
+  doc.text(
+    `📖 科学依据：${Array.from(citationShorts).slice(0, 4).join(" · ") || "KDIGO 2024 / MOH Malaysia CPG / NHMS 2018-2019 / ADA 2024"}`,
+    MARGIN,
+    y,
+    { width: CONTENT_W }
+  );
+  doc.text(
+    "本报告由 AI 生成，仅供健康参考，不构成医疗诊断或处方。如有疑虑请咨询注册医生。",
+    MARGIN,
+    y + 11,
+    { width: CONTENT_W }
+  );
+
+  // Brand strip bottom
+  doc.rect(0, 832, PAGE_W, 4).fill("#10b981");
+  doc.rect(0, 836, PAGE_W, 6).fill("#059669");
+}
+
+// ─── Helpers ───────────────────────────────────────────────────
+
+// Draws a ring gauge centered at (cx, cy) with radius r.
+// Background is grey, foreground arcs from -90° based on value/max.
+function drawRingGauge(
+  doc: PDFKit.PDFDocument,
+  cx: number,
+  cy: number,
+  r: number,
+  value: number,
+  max: number,
+  color: string
+) {
+  const thickness = Math.max(3, r * 0.22);
+  // Background ring
+  doc
+    .circle(cx, cy, r - thickness / 2)
+    .lineWidth(thickness)
+    .strokeColor("#e2e8f0")
+    .stroke();
+
+  if (value <= 0 || max <= 0) return;
+
+  const pct = Math.max(0, Math.min(1, value / max));
+  if (pct >= 0.999) {
+    doc
+      .circle(cx, cy, r - thickness / 2)
+      .lineWidth(thickness)
+      .strokeColor(color)
+      .stroke();
+    return;
+  }
+
+  // Foreground arc via cubic bezier approximation — for simplicity
+  // draw with line segments around the circle (PDFKit doesn't expose arc).
+  const startAngle = -Math.PI / 2;
+  const endAngle = startAngle + pct * 2 * Math.PI;
+  const steps = Math.max(8, Math.round(48 * pct));
+  const innerR = r - thickness / 2;
+  doc.save();
+  doc.lineWidth(thickness).strokeColor(color).lineCap("round");
+  doc.moveTo(
+    cx + Math.cos(startAngle) * innerR,
+    cy + Math.sin(startAngle) * innerR
+  );
+  for (let i = 1; i <= steps; i++) {
+    const a = startAngle + (i / steps) * (endAngle - startAngle);
+    doc.lineTo(cx + Math.cos(a) * innerR, cy + Math.sin(a) * innerR);
+  }
+  doc.stroke();
+  doc.restore();
 }

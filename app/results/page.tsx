@@ -92,6 +92,7 @@ export default function ResultsPage() {
   const result = useHealthStore((s) => s.analysisResult);
   const registration = useHealthStore((s) => s.registration);
   const answers = useHealthStore((s) => s.answers);
+  const labValues = useHealthStore((s) => s.labValues);
   const reset = useHealthStore((s) => s.reset);
 
   const [saving, setSaving] = useState(false);
@@ -130,7 +131,7 @@ export default function ResultsPage() {
       const res = await fetch("/api/save-report", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ registration, answers, result }),
+        body: JSON.stringify({ registration, answers, result, labValues }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));

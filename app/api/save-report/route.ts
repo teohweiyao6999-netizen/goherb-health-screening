@@ -1,14 +1,17 @@
 import { NextResponse } from "next/server";
-import { buildPdfBuffer } from "@/lib/pdf-generator";
+import { buildReportHtml } from "@/lib/html-pdf-template";
+import { renderHtmlToPdf } from "@/lib/pdf-render";
 import type { Registration, AnalysisResult, SymptomAnswer } from "@/lib/types";
+import type { LabValues } from "@/lib/lab-values";
 
 export const runtime = "nodejs";
-export const maxDuration = 30;
+export const maxDuration = 60;
 
 interface Body {
   registration: Registration;
   answers: Record<string, SymptomAnswer>;
   result: AnalysisResult;
+  labValues?: LabValues;
 }
 
 function safeFilenamePart(s: string): string {
@@ -36,13 +39,13 @@ export async function POST(req: Request) {
   }
 
   try {
-    const pdf = await buildPdfBuffer(body);
+    const html = buildReportHtml(body);
+    const pdf = await renderHtmlToPdf(html);
 
     const name = safeFilenamePart(body.registration.name) || "client";
     const phone = safeFilenamePart(body.registration.phone) || "nophone";
     const filename = `GoHerb_${name}_${phone}_${timestampStr()}.pdf`;
 
-    // Stream PDF as a download response (works on Vercel + local)
     return new NextResponse(new Uint8Array(pdf), {
       status: 200,
       headers: {

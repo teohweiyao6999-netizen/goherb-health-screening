@@ -52,6 +52,9 @@ export interface SystemAnalysis {
   // One-sentence cause-effect conclusion: quotes the user's red-flag answers
   // and explains what those answers, combined, mean. Used in WhyThisResult.
   causeEffect: string;
+  // 60-100 word explanation of what happens if this risk continues unaddressed
+  // (compliant language: no diagnosis, no specific disease prediction).
+  riskExplanation: string;
   // One actionable next-step recommendation
   recommendation: string;
   // The single citation key from CITATIONS library that supports this analysis

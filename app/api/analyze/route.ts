@@ -9,9 +9,12 @@ import {
 import { ALL_CITATION_KEYS } from "@/lib/citations";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+export const maxDuration = 180;
 
-const MODEL = "claude-sonnet-4-6";
+// Opus 4.7 — highest quality for detailed health analysis.
+// Tradeoff: slower (~30-50s) and pricier than Sonnet, but the report
+// quality is what the customer sees, so we don't skimp.
+const MODEL = "claude-opus-4-7";
 
 const SYSTEM_SCHEMA = {
   type: "object",
@@ -25,12 +28,17 @@ const SYSTEM_SCHEMA = {
     paragraph: {
       type: "string",
       description:
-        "2-4 句话的简洁段落，马来华语白话。引用用户具体的回答（用 **粗体** 包起来），让销售员读出来时听起来是基于客户的回复。例如：'你刚才说 **尿泡 3 分钟还散不掉**，加上 **夜尿 3 次**，这两个都是肾小球开始受损的早期信号。'",
+        "150-250 字的详细段落。马来华语白话。必须引用 3 个以上用户回答（**粗体** 包起来）+ 解释生理机制 + 引用化验数值（如有）+ 提及拖延时间。销售员要讲 1 分钟以上，必须有干货。不可少于 150 字。",
     },
     causeEffect: {
       type: "string",
       description:
-        "一句话因果结论，给「为什么是这个结果」区块用。要点：引用用户的红灯答案，讲清这几个答案合起来代表什么。例如：'尿泡多 + 夜尿频繁 + 腰酸，这 3 个加起来，是肾小球过滤功能开始下降的典型组合。' 低风险时写正面版：'这几项你都答得不错，代表肾脏目前的过滤功能还稳定。'",
+        "20-40 字的一句话因果结论。引用红灯答案，讲清「这几个加起来 → 生理后果」。",
+    },
+    riskExplanation: {
+      type: "string",
+      description:
+        "60-100 字。解释这个风险继续下去身体会发生什么。合规语言：不诊断、不预测「会得 X 病」。但要画面感强，让用户感受到不能拖。范例：'肾脏的滤网（肾小球）一旦受损就不可逆。早期症状轻，等到 eGFR 跌破 60，毒素就开始堆积。继续重口味 + 长期吃止痛药，等同每天逼肾加班。'",
     },
     recommendation: {
       type: "string",
@@ -48,6 +56,7 @@ const SYSTEM_SCHEMA = {
     "visualMetaphor",
     "paragraph",
     "causeEffect",
+    "riskExplanation",
     "recommendation",
     "citationKey",
   ],
@@ -113,7 +122,7 @@ export async function POST(req: Request) {
   try {
     const response = await client.messages.create({
       model: MODEL,
-      max_tokens: 4000,
+      max_tokens: 12000,
       system: [
         {
           type: "text",
