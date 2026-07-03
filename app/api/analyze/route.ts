@@ -28,7 +28,7 @@ const SYSTEM_SCHEMA = {
     paragraph: {
       type: "string",
       description:
-        "150-250 字的详细段落。马来华语白话。必须引用 3 个以上用户回答（**粗体** 包起来）+ 解释生理机制 + 引用化验数值（如有）+ 提及拖延时间。销售员要讲 1 分钟以上，必须有干货。不可少于 150 字。",
+        "80-120 字段落。马来华语白话。必须引用 2 个以上用户回答（**粗体** 包起来）+ 简短解释生理机制 + 引用化验数值（如有）。不可少于 80 字，不可超过 130 字。",
     },
     causeEffect: {
       type: "string",
@@ -122,7 +122,7 @@ export async function POST(req: Request) {
   try {
     const response = await client.messages.create({
       model: MODEL,
-      max_tokens: 8000,
+      max_tokens: 6000,
       system: [
         {
           type: "text",
