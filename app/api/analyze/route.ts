@@ -9,12 +9,12 @@ import {
 import { ALL_CITATION_KEYS } from "@/lib/citations";
 
 export const runtime = "nodejs";
-// Vercel Pro allows up to 300s. Opus 4.7 with detailed output finishes 30-60s.
+// Vercel Pro allows up to 300s. Sonnet 4.6 usually finishes in 20-40s.
 export const maxDuration = 300;
 
-// Opus 4.7 — highest quality for detailed health analysis.
-// Now that we're on Vercel Pro (300s function timeout), we can afford Opus.
-const MODEL = "claude-opus-4-7";
+// Sonnet 4.6 — 5x cheaper than Opus with comparable output quality for
+// structured medical analysis. ~$0.06-0.12 per report vs Opus $0.30-0.60.
+const MODEL = "claude-sonnet-4-6";
 
 const SYSTEM_SCHEMA = {
   type: "object",
