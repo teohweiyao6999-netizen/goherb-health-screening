@@ -15,16 +15,33 @@ export async function renderHtmlToPdf(html: string): Promise<Buffer> {
   const browser = await launchBrowser();
   try {
     const page = await browser.newPage();
-    // Block external resources to avoid waiting on fonts/images that won't load
+    // Allow document + stylesheet + fonts (needed for Chinese font on Vercel).
+    // Block images/scripts/etc so page still loads fast.
     await page.setRequestInterception(true);
     page.on("request", (req) => {
       const type = req.resourceType();
-      if (type === "document" || type === "stylesheet") req.continue();
-      else req.abort();
+      const url = req.url();
+      if (
+        type === "document" ||
+        type === "stylesheet" ||
+        type === "font" ||
+        url.includes("fonts.googleapis.com") ||
+        url.includes("fonts.gstatic.com")
+      ) {
+        req.continue();
+      } else {
+        req.abort();
+      }
     });
     await page.setContent(html, {
-      waitUntil: "domcontentloaded",
+      waitUntil: "load",
       timeout: 60000,
+    });
+    // Wait for fonts to be fully loaded (Google Fonts CSS + WOFF2 files)
+    await page.evaluate(async () => {
+      if ("fonts" in document) {
+        await (document as Document & { fonts: { ready: Promise<void> } }).fonts.ready;
+      }
     });
     // Auto-fit content to single page: scale page-inner down if it overflows
     await page.evaluate(() => {
